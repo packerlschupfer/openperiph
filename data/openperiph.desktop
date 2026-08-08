@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=OpenPeriph
+Comment=Configure gaming peripheral settings
+Exec=openperiph-gui
+Icon=openperiph
+Type=Application
+Categories=Settings;HardwareSettings;
+Keywords=mouse;keyboard;gaming;dpi;peripheral;
+StartupNotify=true

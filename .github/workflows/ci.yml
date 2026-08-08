@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  lint-and-import:
+    name: Lint & import check
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            python3-usb \
+            python3-gi \
+            gir1.2-gtk-4.0 \
+            gir1.2-adw-1 \
+            gir1.2-dbusmenu-glib-0.4
+
+      - name: Syntax check
+        run: |
+          for f in src/openperiph/*.py src/openperiph/drivers/*.py; do
+            python3 -m py_compile "$f"
+          done
+          echo "Syntax OK"
+
+      - name: Import check (backend)
+        env:
+          PYTHONPATH: src
+        run: |
+          python3 -c "
+          from openperiph import scan_devices, find_device, __version__
+          from openperiph.base import PeripheralDevice, DeviceCapabilities
+          from openperiph.hid import describe_button, parse_button_function
+          from openperiph.drivers import discover_all
+          print(f'Backend imports OK -- v{__version__}')
+          print(f'Drivers: {list(discover_all())}')
+          "
+
+      - name: Driver registration check
+        env:
+          PYTHONPATH: src
+        run: |
+          python3 -c "
+          import pathlib, tomllib
+          from openperiph.drivers import discover_all
+
+          modules = {p.stem for p in pathlib.Path('src/openperiph/drivers').glob('*.py')
+                     if p.stem != '__init__'}
+          found = discover_all()
+          with open('pyproject.toml', 'rb') as f:
+              eps = tomllib.load(f)['project']['entry-points']['openperiph.drivers']
+
+          missing_ep = modules - set(eps)
+          stale_ep = set(eps) - modules
+          undiscovered = modules - set(found)
+          mismatched = {k for k, cls in found.items()
+                        if cls.__module__ != f'openperiph.drivers.{k}'}
+
+          for label, bad in [('driver modules with no entry point', missing_ep),
+                             ('entry points with no module', stale_ep),
+                             ('modules discover_all() missed', undiscovered),
+                             ('drivers registered under the wrong module', mismatched)]:
+              if bad:
+                  raise SystemExit(f'{label}: {sorted(bad)}')
+
+          print(f'{len(modules)} drivers, all discovered and registered: {sorted(modules)}')
+          "
+
+      - name: Import check (GUI -- no display needed)
+        run: |
+          python3 -c "
+          import gi
+          gi.require_version('Gtk', '4.0')
+          gi.require_version('Adw', '1')
+          gi.require_version('Dbusmenu', '0.4')
+          from gi.repository import Gtk, Adw, GLib, Gio, Dbusmenu
+          print('GUI imports OK')
+          "

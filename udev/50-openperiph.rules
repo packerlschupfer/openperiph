@@ -1,0 +1,52 @@
+# udev rules for OpenPeriph-supported peripherals
+# Grants device access to the logged-in seat user via TAG+="uaccess"
+# (systemd-logind ACL - no group needed). MODE="0660" is a fallback for
+# non-logind setups. Deliberately no GROUP="plugdev": many modern distros
+# (including stock NixOS) don't create that group, and udev treats a rule
+# referencing an unresolvable group as invalid *in its entirety* - MODE and
+# TAG on the same line silently stop applying too, not just GROUP.
+#
+# The hidraw line beside each USB line is what lets the GUI/tray listen for
+# DPI-change events (see each driver's find_hidraw()); without it the
+# settings still work but the live DPI readout stays silent.
+#
+# Every new driver adds its VID:PID pair here.
+#
+# Install:
+#   sudo cp udev/50-openperiph.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#   (then re-plug the device or reboot)
+
+# ── Pulsar (Sonix chipset, VID 0x3710) ──────────────────────────────────
+
+# Pulsar Xlite Wired (PID 0x1401)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1401", MODE="0660", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1401", MODE="0660", TAG+="uaccess"
+
+# Pulsar X2 Wired (PID 0x1402)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1402", MODE="0660", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1402", MODE="0660", TAG+="uaccess"
+
+# Pulsar X2H Wired Medium (PID 0x1403)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1403", MODE="0660", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1403", MODE="0660", TAG+="uaccess"
+
+# Pulsar X2A Medium Wired (PID 0x1404)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1404", MODE="0660", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1404", MODE="0660", TAG+="uaccess"
+
+# Pulsar Xlite v4 (PID 0x3401)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="3401", MODE="0660", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="3401", MODE="0660", TAG+="uaccess"
+
+# Feinmann FO1 / 8K dongle (PID 0x5404) - shares Pulsar's VID and framing
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="5404", MODE="0660", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="5404", MODE="0660", TAG+="uaccess"
+
+# ── Pulsar (Nordic chipset, VID 0x3554) ─────────────────────────────────
+
+# X2A Wireless, X2 V2 Mini
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3554", ATTRS{idProduct}=="f507", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3554", ATTRS{idProduct}=="f508", MODE="0660", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3554", ATTRS{idProduct}=="f507", MODE="0660", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3554", ATTRS{idProduct}=="f508", MODE="0660", TAG+="uaccess"

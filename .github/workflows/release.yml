@@ -1,0 +1,332 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-deb:
+    name: Build .deb package
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            dpkg-dev \
+            fakeroot
+
+      - name: Set version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Build .deb
+        run: |
+          PKG=openperiph
+          VER=$VERSION
+          ARCH=all
+          DIR="${PKG}_${VER}_${ARCH}"
+
+          # Package tree
+          mkdir -p "${DIR}/DEBIAN"
+          mkdir -p "${DIR}/usr/local/bin"
+          mkdir -p "${DIR}/usr/share/applications"
+          mkdir -p "${DIR}/etc/udev/rules.d"
+
+          # Python package
+          PKG_DIR="${DIR}/usr/lib/python3/dist-packages/openperiph"
+          DRIVERS_DIR="${PKG_DIR}/drivers"
+          mkdir -p "${DRIVERS_DIR}"
+
+          for f in src/openperiph/*.py; do
+            install -m 644 "$f" "${PKG_DIR}/"
+          done
+          for f in src/openperiph/drivers/*.py; do
+            install -m 644 "$f" "${DRIVERS_DIR}/"
+          done
+
+          # CLI entry point
+          cat > "${DIR}/usr/local/bin/openperiph" << 'SCRIPT'
+          #!/usr/bin/env python3
+          from openperiph.cli import main
+          main()
+          SCRIPT
+          chmod 755 "${DIR}/usr/local/bin/openperiph"
+
+          # GUI entry point
+          cat > "${DIR}/usr/local/bin/openperiph-gui" << 'SCRIPT'
+          #!/usr/bin/env python3
+          from openperiph.gui import main
+          main()
+          SCRIPT
+          chmod 755 "${DIR}/usr/local/bin/openperiph-gui"
+
+          # udev rules
+          install -m 644 udev/50-openperiph.rules \
+            "${DIR}/etc/udev/rules.d/50-openperiph.rules"
+
+          # Desktop entry + icon
+          install -m 644 data/openperiph.desktop \
+            "${DIR}/usr/share/applications/openperiph.desktop"
+          mkdir -p "${DIR}/usr/share/icons/hicolor/scalable/apps"
+          install -m 644 data/openperiph.svg \
+            "${DIR}/usr/share/icons/hicolor/scalable/apps/openperiph.svg"
+
+          # control file
+          cat > "${DIR}/DEBIAN/control" << EOF
+          Package: openperiph
+          Version: ${VER}
+          Architecture: ${ARCH}
+          Maintainer: packerlschupfer
+          Depends: python3, python3-usb, python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1, gir1.2-dbusmenu-glib-0.4
+          Description: Linux configuration tool for gaming peripherals
+           Plugin-based tool providing CLI and GTK4/libadwaita GUI for
+           configuring gaming mice and keyboards. Supports multiple models
+           and manufacturers via device-specific protocol drivers.
+          EOF
+
+          # postinst: reload udev rules
+          cat > "${DIR}/DEBIAN/postinst" << 'EOF'
+          #!/bin/sh
+          set -e
+          udevadm control --reload-rules || true
+          udevadm trigger || true
+          EOF
+          chmod 755 "${DIR}/DEBIAN/postinst"
+
+          fakeroot dpkg-deb --build "${DIR}"
+          echo "DEB_PATH=${DIR}.deb" >> "$GITHUB_ENV"
+
+      - name: Stash .deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkg-deb
+          path: "*.deb"
+          if-no-files-found: error
+
+  build-tarball:
+    name: Build tarball
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Build tarball
+        run: |
+          DIR="openperiph-${VERSION}"
+          mkdir -p "$DIR"
+          cp -r src/ udev/ data/ install.sh pyproject.toml README.md LICENSE "$DIR/"
+          tar czf "${DIR}.tar.gz" "$DIR"
+
+      - name: Stash tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkg-tarball
+          path: "*.tar.gz"
+          if-no-files-found: error
+
+  build-rpm:
+    name: Build .rpm package
+    runs-on: ubuntu-24.04
+    container: fedora:44
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build tools
+        run: dnf install -y rpm-build python3-rpm-macros
+
+      - name: Set version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Build .rpm
+        run: |
+          PKG=openperiph
+          VER=$VERSION
+          TOPDIR="$(pwd)/rpmbuild"
+          SRC="$(pwd)"
+
+          mkdir -p "${TOPDIR}"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+
+          cat > "${TOPDIR}/SPECS/${PKG}.spec" << SPEC
+          Name:           ${PKG}
+          Version:        ${VER}
+          Release:        1
+          Summary:        Linux configuration tool for gaming peripherals
+          License:        MIT
+          BuildArch:      noarch
+          Requires:       python3, python3-pyusb, python3-gobject, gtk4, libadwaita
+
+          %description
+          Plugin-based tool providing CLI and GTK4/libadwaita GUI for
+          configuring gaming mice and keyboards. Supports multiple models
+          and manufacturers via device-specific protocol drivers.
+
+          %install
+          SITE=%{buildroot}%{python3_sitelib}/openperiph
+          install -d \${SITE}/drivers
+          for f in ${SRC}/src/openperiph/*.py; do
+            install -m 644 \$f \${SITE}/
+          done
+          for f in ${SRC}/src/openperiph/drivers/*.py; do
+            install -m 644 \$f \${SITE}/drivers/
+          done
+
+          install -d %{buildroot}/usr/local/bin
+          printf '#!/usr/bin/env python3\nfrom openperiph.cli import main\nmain()\n' > %{buildroot}/usr/local/bin/openperiph
+          chmod 755 %{buildroot}/usr/local/bin/openperiph
+          printf '#!/usr/bin/env python3\nfrom openperiph.gui import main\nmain()\n' > %{buildroot}/usr/local/bin/openperiph-gui
+          chmod 755 %{buildroot}/usr/local/bin/openperiph-gui
+
+          install -d %{buildroot}/etc/udev/rules.d
+          install -m 644 ${SRC}/udev/50-openperiph.rules %{buildroot}/etc/udev/rules.d/
+
+          install -d %{buildroot}/usr/share/applications
+          install -m 644 ${SRC}/data/openperiph.desktop %{buildroot}/usr/share/applications/
+
+          install -d %{buildroot}/usr/share/icons/hicolor/scalable/apps
+          install -m 644 ${SRC}/data/openperiph.svg %{buildroot}/usr/share/icons/hicolor/scalable/apps/
+
+          %files
+          /usr/local/bin/openperiph
+          /usr/local/bin/openperiph-gui
+          %{python3_sitelib}/openperiph/
+          /etc/udev/rules.d/50-openperiph.rules
+          /usr/share/applications/openperiph.desktop
+          /usr/share/icons/hicolor/scalable/apps/openperiph.svg
+
+          %post
+          udevadm control --reload-rules || true
+          udevadm trigger || true
+          SPEC
+
+          rpmbuild --define "_topdir ${TOPDIR}" -bb "${TOPDIR}/SPECS/${PKG}.spec"
+          cp "${TOPDIR}"/RPMS/noarch/*.rpm .
+
+      - name: Stash .rpm
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkg-rpm
+          path: "*.rpm"
+          if-no-files-found: error
+
+  build-appimage:
+    name: Build AppImage
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends python3-pip
+
+      - name: Build AppImage
+        run: |
+          set -e
+          APP="OpenPeriph"
+          APPDIR="${APP}.AppDir"
+
+          # Create AppDir structure
+          mkdir -p "${APPDIR}/usr/bin"
+          mkdir -p "${APPDIR}/usr/lib"
+          mkdir -p "${APPDIR}/usr/share/applications"
+          mkdir -p "${APPDIR}/usr/share/icons/hicolor/256x256/apps"
+
+          # Bundle full Python runtime (venv only symlinks stdlib — not portable)
+          PYVER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+          cp /usr/bin/python3 "${APPDIR}/usr/bin/python3"
+          cp -a "/usr/lib/python${PYVER}" "${APPDIR}/usr/lib/"
+
+          # Install pyusb into the bundled stdlib
+          SITE="${APPDIR}/usr/lib/python${PYVER}"
+          pip install --target="${SITE}" --quiet pyusb
+
+          mkdir -p "${SITE}/openperiph/drivers"
+          cp src/openperiph/*.py         "${SITE}/openperiph/"
+          cp src/openperiph/drivers/*.py "${SITE}/openperiph/drivers/"
+
+          # Desktop file + icon
+          cp data/openperiph.desktop "${APPDIR}/openperiph.desktop"
+          cp data/openperiph.png "${APPDIR}/openperiph.png"
+
+          # AppRun
+          cat > "${APPDIR}/AppRun" << 'APPRUN'
+          #!/bin/bash
+          HERE="$(dirname "$(readlink -f "$0")")"
+          export PATH="${HERE}/usr/bin:${PATH}"
+          export PYTHONHOME="${HERE}/usr"
+
+          # Add system site-packages so gi (PyGObject), dbus, etc. are found
+          for d in /usr/lib/python3/dist-packages \
+                   /usr/lib/python3.*/dist-packages \
+                   /usr/lib/python3.*/site-packages \
+                   /usr/lib64/python3.*/site-packages; do
+              [ -d "$d" ] && PYTHONPATH="${PYTHONPATH:+${PYTHONPATH}:}${d}"
+          done
+          export PYTHONPATH
+
+          if [ "$1" = "--cli" ]; then
+              shift
+              exec "${HERE}/usr/bin/python3" -m openperiph.cli "$@"
+          else
+              exec "${HERE}/usr/bin/python3" -m openperiph.gui "$@"
+          fi
+          APPRUN
+          chmod 755 "${APPDIR}/AppRun"
+
+          # Download appimagetool
+          curl -sL -o appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+
+          ARCH=x86_64 ./appimagetool --no-appstream "${APPDIR}" \
+            "openperiph-${VERSION}-x86_64.AppImage"
+
+      - name: Stash AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkg-appimage
+          path: "*.AppImage"
+          if-no-files-found: error
+
+  # Single publisher. Every build job used to call action-gh-release itself,
+  # and four parallel calls race to create the release for the tag: one wins,
+  # the losers create a duplicate draft they then cannot finalize
+  # ("already_exists: tag_name"). v0.1.1 lost the AppImage that way. Builds
+  # now hand artifacts to the workflow and exactly one job publishes.
+  publish:
+    name: Publish release
+    runs-on: ubuntu-24.04
+    needs: [build-deb, build-tarball, build-rpm, build-appimage]
+
+    steps:
+      - name: Collect artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: pkg-*
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -l dist/
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
